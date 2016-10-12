@@ -50,13 +50,13 @@ func retry(req *http.Request, c *http.Client, n int, rng *int64) (resp *http.Res
 	return
 }
 
-// Get begins downloading the given URL.
-func Get(u string) (ReadCloseSeeker, error) {
-	return GetCustom(u, DefaultAttempts, DefaultClient, nil)
+// Grab begins downloading the given URL.
+func Grab(u string) (ReadCloseSeeker, error) {
+	return GrabOptions(u, DefaultAttempts, DefaultClient, nil)
 }
 
-// GetCustom begins downloading the given URL with custom options.
-func GetCustom(u string, n int, c *http.Client, h http.Header) (ReadCloseSeeker, error) {
+// GrabOptions begins downloading the given URL with custom options.
+func GrabOptions(u string, n int, c *http.Client, h http.Header) (ReadCloseSeeker, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
