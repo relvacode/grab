@@ -39,6 +39,21 @@ func newRespError(r *http.Response) *RespError {
 	return e
 }
 
+// IsResponseError attempts to get the response error from a given error.
+// Also uses errors.Cause() to see if a response error is the cause of the given error.
+func IsResponseError(err error) (*RespError, bool) {
+	if err == nil {
+		return nil, false
+	}
+	if r, ok := err.(*RespError); ok {
+		return r, ok
+	}
+	if r, ok := errors.Cause(err).(*RespError); ok {
+		return r, ok
+	}
+	return nil, false
+}
+
 // RespError represents an http error response from S3
 // http://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html
 type RespError struct {
