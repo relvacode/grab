@@ -1,2 +1,3 @@
-# httprange
-Stable ranged based HTTP downloading for Go
+# Grab
+
+> Simple http client wrapper for stable retryable downloads
