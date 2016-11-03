@@ -1,6 +1,7 @@
 # Grab
 
 [![GoDoc](https://godoc.org/github.com/relvacode/grab?status.svg)](https://godoc.org/github.com/relvacode/grab)
+[![Build Status](https://travis-ci.org/relvacode/grab.svg?branch=master)](https://travis-ci.org/relvacode/grab)
 
 ```go
 import "github.com/relvacode/grab"
