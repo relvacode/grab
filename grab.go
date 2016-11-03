@@ -20,12 +20,12 @@ type ReadCloseSeeker interface {
 
 var (
 	// Log is the logger used to print errors in retry attempts
-	Log = log.New(ioutil.Discard, "s3  ", 3)
+	Log = log.New(ioutil.Discard, "", 3)
 )
 
 var (
 	// DefaultClient is the HTTP client used for downloading.
-	DefaultClient = ClientWithTimeout(time.Second * 10)
+	DefaultClient = ClientWithTimeout(time.Second*10, true)
 
 	// DefaultAttempts is the number of default retries before giving up.
 	DefaultAttempts = 5
@@ -50,13 +50,13 @@ func retry(req *http.Request, c *http.Client, n int, rng *int64) (resp *http.Res
 	return
 }
 
-// Grab begins downloading the given URL.
-func Grab(u string) (ReadCloseSeeker, error) {
-	return GrabOptions(u, DefaultAttempts, DefaultClient, nil)
+// Open begins downloading the given URL.
+func Open(u string) (*Body, error) {
+	return OpenWith(u, DefaultAttempts, DefaultClient, nil)
 }
 
-// GrabOptions begins downloading the given URL with custom options.
-func GrabOptions(u string, n int, c *http.Client, h http.Header) (ReadCloseSeeker, error) {
+// OpenWith begins downloading the given URL with custom options.
+func OpenWith(u string, n int, c *http.Client, h http.Header) (*Body, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -76,11 +76,14 @@ func GrabOptions(u string, n int, c *http.Client, h http.Header) (ReadCloseSeeke
 	if resp.Request.URL.String() != req.URL.String() {
 		req.URL = resp.Request.URL
 	}
-	return &body{c: c, body: resp.Body, tPos: resp.ContentLength, req: req, n: n}, nil
+	return &Body{c: c, body: resp.Body, tPos: resp.ContentLength, req: req, n: n}, nil
 }
 
+// Ensure Body implements ReadCloseSeeker
+var _ ReadCloseSeeker = &Body{}
+
 // Body is a wrapper http response body
-type body struct {
+type Body struct {
 	c *http.Client
 	n int
 
@@ -94,7 +97,13 @@ type body struct {
 	err    error
 }
 
-func (b *body) Close() error {
+// Len returns the total length in bytes of the content.
+func (b *Body) Len() int64 {
+	return b.tPos
+}
+
+// Close closes the currently opened body.
+func (b *Body) Close() error {
 	if b.closed {
 		return syscall.EINVAL
 	}
@@ -105,8 +114,8 @@ func (b *body) Close() error {
 	return nil
 }
 
-func (b *body) nextReader() error {
-	n := b.cPos + 1
+func (b *Body) nextReader() error {
+	n := b.cPos
 	resp, err := retry(b.req, b.c, b.n, &n)
 	if err != nil {
 		return err
@@ -120,7 +129,7 @@ func (b *body) nextReader() error {
 	return nil
 }
 
-func (b *body) read(p []byte) (n int, err error) {
+func (b *Body) read(p []byte) (n int, err error) {
 	for i := 0; i < b.n; i++ {
 		n, err = b.body.Read(p)
 		b.cPos += int64(n)
@@ -139,7 +148,7 @@ func (b *body) read(p []byte) (n int, err error) {
 	return
 }
 
-func (b *body) Read(p []byte) (int, error) {
+func (b *Body) Read(p []byte) (int, error) {
 	if b.closed {
 		return 0, syscall.EINVAL
 	}
@@ -147,11 +156,11 @@ func (b *body) Read(p []byte) (int, error) {
 		return 0, b.err
 	}
 
-	if b.cPos == b.tPos {
+	if b.cPos == b.tPos+1 {
 		return 0, io.EOF
 	}
 
-	if b.cPos > b.tPos {
+	if b.cPos > b.tPos+1 {
 		return 0, errors.Errorf("read at position %d past %d boundary", b.cPos, b.tPos)
 	}
 
@@ -183,7 +192,10 @@ func (b *body) Read(p []byte) (int, error) {
 	return nw, nil
 }
 
-func (b *body) Seek(offset int64, whence int) (int64, error) {
+// Seek seeks to the requested position.
+// If the new position is different then the current body is closed and discarded,
+// A new request is made for the new position on the next read call.
+func (b *Body) Seek(offset int64, whence int) (int64, error) {
 	pos := b.cPos
 	switch whence {
 	case io.SeekCurrent:
@@ -198,8 +210,15 @@ func (b *body) Seek(offset int64, whence int) (int64, error) {
 		return b.cPos, errors.New("cannot seek before beginning")
 	}
 
+	// Do not seek if new position is the same
+	if b.cPos == pos {
+		return b.cPos, nil
+	}
+
 	b.cPos = pos
-	b.body.Close()
-	b.body = nil
+	if b.body != nil {
+		b.body.Close()
+		b.body = nil
+	}
 	return b.cPos, nil
 }

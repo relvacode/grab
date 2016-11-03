@@ -34,14 +34,18 @@ func CheckRedirectPreserveHeaders(limit int) func(*http.Request, []*http.Request
 
 // ClientWithTimeout returns the recommended client to use with this package.
 // It features a universal timeout and allows proxy configuration from the environment.
-func ClientWithTimeout(timeout time.Duration) *http.Client {
+// If PreserveHeaders is true then the client will preserve headers across hostname boundaries.
+func ClientWithTimeout(timeout time.Duration, PreserveHeaders bool) *http.Client {
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		ResponseHeaderTimeout: timeout,
 		MaxIdleConnsPerHost:   10,
 	}
-	return &http.Client{
-		Transport:     transport,
-		CheckRedirect: CheckRedirectPreserveHeaders(2),
+	c := &http.Client{
+		Transport: transport,
 	}
+	if PreserveHeaders {
+		c.CheckRedirect = CheckRedirectPreserveHeaders(5)
+	}
+	return c
 }
