@@ -3,13 +3,14 @@ package grab
 
 import (
 	"fmt"
-	"github.com/pkg/errors"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"syscall"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 // ReadCloseSeeker is an interface that wraps io.ReadCloser and io.Seeker.
@@ -57,6 +58,12 @@ func Open(u string) (*Body, error) {
 
 // OpenWith begins downloading the given URL with custom options.
 func OpenWith(u string, n int, c *http.Client, h http.Header) (*Body, error) {
+	if c == nil {
+		c = DefaultClient
+	}
+	if n == 0 {
+		n = DefaultAttempts
+	}
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
