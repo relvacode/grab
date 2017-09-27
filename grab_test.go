@@ -2,13 +2,22 @@ package grab
 
 import (
 	"bytes"
+	"crypto/md5"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/pkg/errors"
 )
+
+func init() {
+	Log.SetOutput(os.Stderr)
+}
 
 var testContent = []byte(`
 Lorem ipsum dolor sit amet, consectetur adipiscing elit.
@@ -77,5 +86,65 @@ func TestGrab(t *testing.T) {
 	}
 	if int64(rd) != testContentLength {
 		t.Fatalf("expected %d bytes read, got %d", testContentLength, rd)
+	}
+}
+
+type BrokenReadSeeker struct {
+	TotalLength int64
+
+	r    *bytes.Reader
+	read int
+}
+
+func (brs *BrokenReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekEnd:
+		return brs.TotalLength, nil
+	default:
+		return brs.r.Seek(offset, whence)
+	}
+}
+
+func (brs *BrokenReadSeeker) Read(b []byte) (int, error) {
+	r, _ := brs.r.Read(b[:brs.TotalLength/4])
+	return r, errors.New("ERROR")
+}
+
+func (brs *BrokenReadSeeker) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	http.ServeContent(rw, r, "", time.Time{}, brs)
+}
+
+func TestGrabDisconnect(t *testing.T) {
+	// Get the expected MD5 of the test content
+	compare := md5.New()
+	compare.Write(testContent)
+	expect := fmt.Sprintf("%x", compare.Sum(nil))
+
+	brs := &BrokenReadSeeker{
+		TotalLength: testContentLength,
+		r:           bytes.NewReader(testContent),
+	}
+	srv := httptest.NewServer(brs)
+	defer srv.Close()
+
+	g, err := Open(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	hash := md5.New()
+	written, err := io.Copy(hash, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != brs.TotalLength {
+		t.Fatalf("Expected %d bytes written; got %d", brs.TotalLength, written)
+	}
+
+	got := fmt.Sprintf("%x", hash.Sum(nil))
+	t.Log(got, expect)
+	if got != expect {
+		t.Fatalf("MD5 mismatch: Expected %q; got %q", expect, got)
 	}
 }

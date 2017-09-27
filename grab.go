@@ -128,10 +128,16 @@ func (b *Body) nextReader() error {
 		return err
 	}
 	// Check response headers are valid
-	if _, ok := resp.Header["Content-Range"]; !ok {
+	r := resp.Header.Get("Content-Range")
+	if r == "" {
 		resp.Body.Close()
 		return errors.New("missing Content-Range header in response")
 	}
+
+	if resp.ContentLength != b.tPos-b.cPos {
+		return errors.Errorf("expected to read %d bytes of remaining data but got content length of %d", b.tPos-b.cPos, resp.ContentLength)
+	}
+
 	b.body = resp.Body
 	return nil
 }
