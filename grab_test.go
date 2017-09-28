@@ -102,6 +102,15 @@ func TestGrab(t *testing.T) {
 	if expect != got {
 		t.Fatalf("Expected MD5 hash of %q; got %q", expect, got)
 	}
+
+	reported := fmt.Sprintf("%x", g.Sum())
+	if expect != reported {
+		t.Fatalf("Expected MD5 hash of %q; file reported %q", expect, reported)
+	}
+
+	if err := g.VerifyCopiedData(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type BrokenReadSeeker struct {
@@ -200,5 +209,18 @@ func TestGrabDisconnectMustFatal(t *testing.T) {
 	_, err = io.Copy(ioutil.Discard, g)
 	if err == nil {
 		t.Fatal("Expected an error but got nil")
+	}
+}
+
+func TestGrabSeekNoVerify(t *testing.T) {
+	tag := "123"
+	b := &Body{
+		ETag: &tag,
+		md5:  md5.New(),
+	}
+
+	b.Seek(1, io.SeekStart)
+	if err := b.VerifyCopiedData(); err == nil {
+		t.Fatal("expected an error")
 	}
 }

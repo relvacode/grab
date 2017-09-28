@@ -2,7 +2,9 @@
 package grab
 
 import (
+	"crypto/md5"
 	"fmt"
+	"hash"
 	"io"
 	"io/ioutil"
 	"log"
@@ -51,6 +53,20 @@ func retry(req *http.Request, c *http.Client, n int, rng *int64) (resp *http.Res
 	return
 }
 
+func tryParseETag(resp *http.Response) *string {
+	header := resp.Header.Get("Etag")
+	if header == "" {
+		return nil
+	}
+	// Expect exactly 32 bytes for an MD5 digest
+	// Only files uploaded as one block without multi-part upload are supported.
+	if len(header) != 32 {
+		return nil
+	}
+
+	return &header
+}
+
 // Open begins downloading the given URL.
 func Open(u string) (*Body, error) {
 	return OpenWith(u, DefaultAttempts, DefaultClient, nil)
@@ -78,12 +94,26 @@ func OpenWith(u string, n int, c *http.Client, h http.Header) (*Body, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	// If new URL is different then cache the new URL for further requests.
 	// Prevents having to follow a redirect for every retry.
 	if resp.Request.URL.String() != req.URL.String() {
 		req.URL = resp.Request.URL
 	}
-	return &Body{c: c, body: resp.Body, tPos: resp.ContentLength, req: req, n: n}, nil
+
+	md5sum := md5.New()
+	tee := io.TeeReader(resp.Body, md5sum)
+
+	return &Body{
+		ETag: tryParseETag(resp),
+		md5:  md5sum,
+		tee:  tee,
+		c:    c,
+		body: resp.Body,
+		tPos: resp.ContentLength,
+		req:  req,
+		n:    n,
+	}, nil
 }
 
 // Ensure Body implements ReadCloseSeeker
@@ -91,16 +121,21 @@ var _ ReadCloseSeeker = &Body{}
 
 // Body is a wrapper http response body
 type Body struct {
+	ETag *string
+
 	c *http.Client
 	n int
 
 	req  *http.Request
 	body io.ReadCloser
+	md5  hash.Hash
+	tee  io.Reader
 
 	cPos int64
 	tPos int64
 
 	closed bool
+	seeked bool
 	err    error
 }
 
@@ -117,6 +152,32 @@ func (b *Body) Close() error {
 	b.closed = true
 	if b.body != nil {
 		return b.body.Close()
+	}
+	return nil
+}
+
+// Sum returns the MD5 digest for the currently copied bytes from the server.
+// NOTE: If body has been seeked then this value will not represent the contents of the entire file.
+func (b *Body) Sum() []byte {
+	return b.md5.Sum(nil)
+}
+
+// VerifyCopiedData checks the copied data and returns an error
+// if the body ETag is set and the MD5 digest doesn't match the contents of the ETag header.
+// Checking the ETag value is not supported for seeked reading (the file must be consumed only once in its entirety)
+// Unless the body has been seeked to 0 and fully consumed, in which case the md5 hash is reset on call to Seek.
+//
+// Checking the value of the ETag is only supported if the file was not uploaded using a multi-part upload.
+func (b *Body) VerifyCopiedData() error {
+	if b.ETag == nil {
+		return nil
+	}
+	if b.seeked {
+		return errors.New("Cannot verify transfer for files that have been seeked")
+	}
+	digest := fmt.Sprintf("%x", b.Sum())
+	if *b.ETag != digest {
+		return errors.Errorf("ETag: Server reported ETag of %q but we calculated a digest of %q", *b.ETag, digest)
 	}
 	return nil
 }
@@ -139,6 +200,8 @@ func (b *Body) nextReader() error {
 		return errors.New("missing Content-Range header in response")
 	}
 
+	// Setup the new TeeReader to read from this response body instead
+	b.tee = io.TeeReader(resp.Body, b.md5)
 	b.body = resp.Body
 	return nil
 }
@@ -153,7 +216,7 @@ func min(a, b int) int {
 func (b *Body) read(p []byte) (n int, err error) {
 	for i := 0; i < b.n; i++ {
 		var rn int
-		rn, err = b.body.Read(p[n:])
+		rn, err = b.tee.Read(p[n:])
 		n += rn
 		b.cPos += int64(rn)
 
@@ -224,6 +287,7 @@ func (b *Body) Read(p []byte) (int, error) {
 // Seek seeks to the requested position.
 // If the new position is different then the current body is closed and discarded,
 // A new request is made for the new position on the next read call.
+// If the new seek position is 0 the md5 hash of the file is reset.
 func (b *Body) Seek(offset int64, whence int) (int64, error) {
 	pos := b.cPos
 	switch whence {
@@ -242,6 +306,13 @@ func (b *Body) Seek(offset int64, whence int) (int64, error) {
 	// Do not seek if new position is the same
 	if b.cPos == pos {
 		return b.cPos, nil
+	}
+
+	if pos == 0 {
+		b.seeked = false
+		b.md5.Reset()
+	} else {
+		b.seeked = true
 	}
 
 	b.cPos = pos
