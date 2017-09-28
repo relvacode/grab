@@ -215,7 +215,7 @@ func TestGrabDisconnectMustFatal(t *testing.T) {
 func TestGrabSeekNoVerify(t *testing.T) {
 	tag := "123"
 	b := &Body{
-		ETag: &tag,
+		etag: &tag,
 		md5:  md5.New(),
 	}
 

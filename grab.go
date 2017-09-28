@@ -105,9 +105,10 @@ func OpenWith(u string, n int, c *http.Client, h http.Header) (*Body, error) {
 	tee := io.TeeReader(resp.Body, md5sum)
 
 	return &Body{
-		ETag: tryParseETag(resp),
 		md5:  md5sum,
 		tee:  tee,
+		etag: tryParseETag(resp),
+
 		c:    c,
 		body: resp.Body,
 		tPos: resp.ContentLength,
@@ -121,15 +122,15 @@ var _ ReadCloseSeeker = &Body{}
 
 // Body is a wrapper http response body
 type Body struct {
-	ETag *string
-
 	c *http.Client
 	n int
 
 	req  *http.Request
 	body io.ReadCloser
-	md5  hash.Hash
 	tee  io.Reader
+
+	etag *string
+	md5  hash.Hash
 
 	cPos int64
 	tPos int64
@@ -162,6 +163,12 @@ func (b *Body) Sum() []byte {
 	return b.md5.Sum(nil)
 }
 
+// ETag returns the ETag of this file as reported by the server.
+// Nil is returned if the ETag is not present or unsupported.
+func (b *Body) ETag() *string {
+	return b.etag
+}
+
 // VerifyCopiedData checks the copied data and returns an error
 // if the body ETag is set and the MD5 digest doesn't match the contents of the ETag header.
 // Checking the ETag value is not supported for seeked reading (the file must be consumed only once in its entirety)
@@ -169,15 +176,15 @@ func (b *Body) Sum() []byte {
 //
 // Checking the value of the ETag is only supported if the file was not uploaded using a multi-part upload.
 func (b *Body) VerifyCopiedData() error {
-	if b.ETag == nil {
+	if b.etag == nil {
 		return nil
 	}
 	if b.seeked {
 		return errors.New("Cannot verify transfer for files that have been seeked")
 	}
 	digest := fmt.Sprintf("%x", b.Sum())
-	if *b.ETag != digest {
-		return errors.Errorf("ETag: Server reported ETag of %q but we calculated a digest of %q", *b.ETag, digest)
+	if *b.etag != digest {
+		return errors.Errorf("ETag: Server reported ETag of %q but we calculated a digest of %q", *b.etag, digest)
 	}
 	return nil
 }
