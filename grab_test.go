@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"fmt"
+	"hash"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -33,6 +34,13 @@ Pellentesque mauris libero, mattis vel leo et, viverra euismod magna.
 `)
 
 var testContentLength = int64(len(testContent))
+
+var testContentHash hash.Hash
+
+func init() {
+	testContentHash = md5.New()
+	testContentHash.Write(testContent)
+}
 
 type MockServer struct {
 }
@@ -80,12 +88,19 @@ func TestGrab(t *testing.T) {
 		t.Fatalf("invalid new seek position %d, wanted 0", pos)
 	}
 
-	rd, err := io.Copy(ioutil.Discard, g)
+	compare := md5.New()
+
+	rd, err := io.Copy(compare, g)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if int64(rd) != testContentLength {
 		t.Fatalf("expected %d bytes read, got %d", testContentLength, rd)
+	}
+	expect := fmt.Sprintf("%x", testContentHash.Sum(nil))
+	got := fmt.Sprintf("%x", compare.Sum(nil))
+	if expect != got {
+		t.Fatalf("Expected MD5 hash of %q; got %q", expect, got)
 	}
 }
 
@@ -115,10 +130,7 @@ func (brs *BrokenReadSeeker) ServeHTTP(rw http.ResponseWriter, r *http.Request) 
 }
 
 func TestGrabDisconnect(t *testing.T) {
-	// Get the expected MD5 of the test content
-	compare := md5.New()
-	compare.Write(testContent)
-	expect := fmt.Sprintf("%x", compare.Sum(nil))
+	expect := fmt.Sprintf("%x", testContentHash.Sum(nil))
 
 	brs := &BrokenReadSeeker{
 		TotalLength: testContentLength,
@@ -146,5 +158,47 @@ func TestGrabDisconnect(t *testing.T) {
 	t.Log(got, expect)
 	if got != expect {
 		t.Fatalf("MD5 mismatch: Expected %q; got %q", expect, got)
+	}
+}
+
+type AlwaysReadError struct {
+	TotalLength int64
+	r           *bytes.Reader
+}
+
+func (brs *AlwaysReadError) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekEnd:
+		return brs.TotalLength, nil
+	default:
+		return brs.r.Seek(offset, whence)
+	}
+}
+
+func (brs *AlwaysReadError) Read(b []byte) (int, error) {
+	return 0, errors.New("ERROR")
+}
+
+func (brs *AlwaysReadError) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	http.ServeContent(rw, r, "", time.Time{}, brs)
+}
+
+func TestGrabDisconnectMustFatal(t *testing.T) {
+	brs := &AlwaysReadError{
+		TotalLength: testContentLength,
+		r:           bytes.NewReader(testContent),
+	}
+	srv := httptest.NewServer(brs)
+	defer srv.Close()
+
+	g, err := Open(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+
+	_, err = io.Copy(ioutil.Discard, g)
+	if err == nil {
+		t.Fatal("Expected an error but got nil")
 	}
 }

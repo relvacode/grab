@@ -122,8 +122,13 @@ func (b *Body) Close() error {
 }
 
 func (b *Body) nextReader() error {
-	n := b.cPos
-	resp, err := retry(b.req, b.c, b.n, &n)
+	// If not reading for the first time
+	// set the start range to the current position
+	var n *int64
+	if b.cPos > 0 {
+		n = &b.cPos
+	}
+	resp, err := retry(b.req, b.c, b.n, n)
 	if err != nil {
 		return err
 	}
@@ -134,18 +139,28 @@ func (b *Body) nextReader() error {
 		return errors.New("missing Content-Range header in response")
 	}
 
-	if resp.ContentLength != b.tPos-b.cPos {
-		return errors.Errorf("expected to read %d bytes of remaining data but got content length of %d", b.tPos-b.cPos, resp.ContentLength)
-	}
-
 	b.body = resp.Body
 	return nil
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func (b *Body) read(p []byte) (n int, err error) {
 	for i := 0; i < b.n; i++ {
-		n, err = b.body.Read(p)
-		b.cPos += int64(n)
+		var rn int
+		rn, err = b.body.Read(p[n:])
+		n += rn
+		b.cPos += int64(rn)
+
+		// A non EOF error occurred but we have enough data anyway
+		if err != io.EOF && b.cPos == b.tPos {
+			return n, err
+		}
 		if err == nil || err == io.EOF {
 			return
 		}
@@ -153,6 +168,7 @@ func (b *Body) read(p []byte) (n int, err error) {
 		sleep(i + 1)
 		b.body.Close()
 		b.body = nil
+
 		if err = b.nextReader(); err != nil {
 			return
 		}
