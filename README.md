@@ -7,4 +7,10 @@
 import "github.com/relvacode/grab"
 ```
 
-Grab is a simple request wrapper to support retryable downloads and seeking using byte range requests. It's it simpler than other ranged downloading libraries because it simply wraps the response body's reader and therefore doesn't do any large memory allocations
+A simple client Go client for downloading files from `byte-range` supported HTTP servers (such as Amazon's S3 and compatible implementations). With automatic retry, seek and file verification built in.
+
+It differs from other Go S3 clients by being simple and memory efficient. HTTP data is copied directly into the buffer used in a call to `Read`. Whilst concurrent ranged downloading is not supported you can copy many files in parallel with little memory overhead.
+
+If a request fails, grab will transparently resume the connection from where it left off.
+
+This library has transffered nearly a petabyte of data in production.
